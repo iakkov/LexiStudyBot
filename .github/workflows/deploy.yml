@@ -36,7 +36,7 @@ jobs:
         run: python -m pytest -q
 
       - name: Validate Docker Compose
-        run: docker compose --env-file .env.example config --quiet
+        run: BOT_ENV_FILE=.env.example docker compose --env-file .env.example config --quiet
 
   deploy:
     name: Deploy to VPS
