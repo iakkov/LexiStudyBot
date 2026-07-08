@@ -1,0 +1,2 @@
+"""LexiBot package."""
+
