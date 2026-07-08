@@ -6,7 +6,7 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-docker compose config --quiet
+docker compose config >/dev/null
 docker compose build --pull bot
 docker compose up -d --remove-orphans
 
@@ -30,4 +30,3 @@ echo "Deployment failed health verification."
 docker compose ps -a
 docker compose logs --no-color --tail=100 postgres bot
 exit 1
-
