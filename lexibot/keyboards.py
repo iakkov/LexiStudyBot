@@ -12,6 +12,8 @@ STUDY_BUTTON = "🎓 Учить"
 EDIT_BUTTON = "✏️ Изменить"
 DELETE_BUTTON = "🗑 Удалить"
 CANCEL_BUTTON = "❌ Отмена"
+ENGLISH_BUTTON = "🇬🇧 English"
+SPANISH_BUTTON = "🇪🇸 Español"
 
 
 def main_menu() -> ReplyKeyboardMarkup:
@@ -20,6 +22,7 @@ def main_menu() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=ADD_BUTTON), KeyboardButton(text=STUDY_BUTTON)],
             [KeyboardButton(text=LIST_BUTTON)],
             [KeyboardButton(text=EDIT_BUTTON), KeyboardButton(text=DELETE_BUTTON)],
+            [KeyboardButton(text=ENGLISH_BUTTON), KeyboardButton(text=SPANISH_BUTTON)],
         ],
         resize_keyboard=True,
         is_persistent=True,
@@ -36,9 +39,10 @@ def cancel_menu() -> ReplyKeyboardMarkup:
 
 
 def reveal_keyboard(card_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}")
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}")],
+        [InlineKeyboardButton(text="🔊 Произнести", callback_data=f"pronounce:{card_id}")],
+    ])
 
 
 def grade_keyboard(card_id: int) -> InlineKeyboardMarkup:
@@ -51,7 +55,14 @@ def grade_keyboard(card_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🙂 Помню", callback_data=f"grade:{card_id}:4"),
             InlineKeyboardButton(text="😎 Легко", callback_data=f"grade:{card_id}:5"),
         ],
+        [InlineKeyboardButton(text="🔊 Произнести", callback_data=f"pronounce:{card_id}")],
     ])
+
+
+def pronunciation_keyboard(card_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔊 Произнести", callback_data=f"pronounce:{card_id}")
+    ]])
 
 
 def delete_keyboard(card_id: int) -> InlineKeyboardMarkup:

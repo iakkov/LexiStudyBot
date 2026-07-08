@@ -22,6 +22,10 @@ class Card:
     ease_factor: float
     due_at: datetime
     learning_level: int = 1
+    language: str = "en"
+    example: str = ""
+    explanation: str = ""
+    comment: str = ""
 
 
 class CardRepository:
@@ -49,8 +53,27 @@ class CardRepository:
                 )
             """)
             await connection.execute(
+                "ALTER TABLE cards ADD COLUMN IF NOT EXISTS language TEXT NOT NULL DEFAULT 'en'"
+            )
+            await connection.execute(
+                "ALTER TABLE cards ADD COLUMN IF NOT EXISTS example TEXT NOT NULL DEFAULT ''"
+            )
+            await connection.execute(
+                "ALTER TABLE cards ADD COLUMN IF NOT EXISTS explanation TEXT NOT NULL DEFAULT ''"
+            )
+            await connection.execute(
+                "ALTER TABLE cards ADD COLUMN IF NOT EXISTS comment TEXT NOT NULL DEFAULT ''"
+            )
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS user_settings (
+                    user_id BIGINT PRIMARY KEY,
+                    language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'es'))
+                )
+            """)
+            await connection.execute("DROP INDEX IF EXISTS idx_cards_user_word")
+            await connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_user_word
-                   ON cards(user_id, lower(word))"""
+                   ON cards(user_id, language, lower(word))"""
             )
             await connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cards_due ON cards(user_id, due_at)"
@@ -65,26 +88,31 @@ class CardRepository:
             raise RuntimeError("Репозиторий не инициализирован")
         return self.pool
 
-    async def add(self, user_id: int, word: str, meaning: str, group_name: str) -> bool:
+    async def add(
+        self, user_id: int, word: str, translation: str, language: str,
+        example: str = "", explanation: str = "", comment: str = "",
+    ) -> bool:
         now = utc_now()
         try:
             async with self._pool().acquire() as connection:
                 await connection.execute(
                     """INSERT INTO cards
-                       (user_id, word, meaning, group_name, due_at, created_at)
-                       VALUES ($1, $2, $3, $4, $5, $6)""",
-                    user_id, word.strip(), meaning.strip(), group_name.strip(), now, now,
+                       (user_id, word, meaning, group_name, due_at, created_at,
+                        language, example, explanation, comment)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                    user_id, word.strip(), translation.strip(), language, now, now,
+                    language, example.strip(), explanation.strip(), comment.strip(),
                 )
             return True
         except asyncpg.UniqueViolationError:
             return False
 
-    async def list_grouped(self, user_id: int) -> dict[str, list[Card]]:
+    async def list_grouped(self, user_id: int, language: str = "en") -> dict[str, list[Card]]:
         async with self._pool().acquire() as connection:
             rows = await connection.fetch(
-                """SELECT * FROM cards WHERE user_id = $1
-                   ORDER BY lower(group_name), lower(word)""",
-                user_id,
+                """SELECT * FROM cards WHERE user_id = $1 AND language = $2
+                   ORDER BY lower(word)""",
+                user_id, language,
             )
         result: dict[str, list[Card]] = {}
         for row in rows:
@@ -92,33 +120,37 @@ class CardRepository:
             result.setdefault(card.group_name, []).append(card)
         return result
 
-    async def due(self, user_id: int, limit: int = 20) -> list[Card]:
+    async def due(self, user_id: int, language: str = "en", limit: int = 20) -> list[Card]:
         async with self._pool().acquire() as connection:
             rows = await connection.fetch(
                 """SELECT * FROM cards
-                   WHERE user_id = $1 AND learning_level < 5 AND due_at <= $2
-                   ORDER BY due_at, id LIMIT $3""",
-                user_id, utc_now(), limit,
+                   WHERE user_id = $1 AND language = $2
+                     AND learning_level < 5 AND due_at <= $3
+                   ORDER BY due_at, id LIMIT $4""",
+                user_id, language, utc_now(), limit,
             )
         return [self._card(row) for row in rows]
 
-    async def find_by_word(self, user_id: int, word: str) -> Card | None:
+    async def find_by_word(self, user_id: int, word: str, language: str = "en") -> Card | None:
         async with self._pool().acquire() as connection:
             row = await connection.fetchrow(
-                "SELECT * FROM cards WHERE user_id = $1 AND lower(word) = lower($2)",
-                user_id, word.strip(),
+                """SELECT * FROM cards
+                   WHERE user_id = $1 AND language = $2 AND lower(word) = lower($3)""",
+                user_id, language, word.strip(),
             )
         return self._card(row) if row else None
 
     async def update(
-        self, card_id: int, user_id: int, word: str, meaning: str, group_name: str,
+        self, card_id: int, user_id: int, word: str, translation: str,
+        example: str, explanation: str, comment: str,
     ) -> bool:
         try:
             async with self._pool().acquire() as connection:
                 result = await connection.execute(
-                    """UPDATE cards SET word = $1, meaning = $2, group_name = $3
-                       WHERE id = $4 AND user_id = $5""",
-                    word.strip(), meaning.strip(), group_name.strip(), card_id, user_id,
+                    """UPDATE cards SET word = $1, meaning = $2, example = $3,
+                       explanation = $4, comment = $5 WHERE id = $6 AND user_id = $7""",
+                    word.strip(), translation.strip(), example.strip(), explanation.strip(),
+                    comment.strip(), card_id, user_id,
                 )
             return result == "UPDATE 1"
         except asyncpg.UniqueViolationError:
@@ -137,6 +169,21 @@ class CardRepository:
                 "SELECT * FROM cards WHERE id = $1 AND user_id = $2", card_id, user_id
             )
         return self._card(row) if row else None
+
+    async def get_language(self, user_id: int) -> str:
+        async with self._pool().acquire() as connection:
+            value = await connection.fetchval(
+                "SELECT language FROM user_settings WHERE user_id = $1", user_id
+            )
+        return value or "en"
+
+    async def set_language(self, user_id: int, language: str) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO user_settings (user_id, language) VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE SET language = EXCLUDED.language""",
+                user_id, language,
+            )
 
     async def save_review(
         self, card_id: int, user_id: int, repetitions: int,
@@ -159,4 +206,6 @@ class CardRepository:
             repetitions=row["repetitions"], interval_days=row["interval_days"],
             ease_factor=row["ease_factor"], due_at=row["due_at"],
             learning_level=row["learning_level"],
+            language=row["language"], example=row["example"],
+            explanation=row["explanation"], comment=row["comment"],
         )
