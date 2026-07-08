@@ -33,7 +33,7 @@ jobs:
         run: python -m compileall -q lexibot tests
 
       - name: Run tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Validate Docker Compose
         run: docker compose --env-file .env.example config --quiet
@@ -64,4 +64,3 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" \
             "cd '$VPS_DEPLOY_PATH' && git checkout main && git pull --ff-only origin main && bash scripts/deploy.sh"
-
