@@ -86,7 +86,7 @@ ssh-keygen -t ed25519 -C "github-actions-lexibot" -f lexibot_deploy_key
 | Secret | Значение |
 | --- | --- |
 | `VPS_HOST` | IP-адрес или домен VPS |
-| `VPS_PORT` | SSH-порт, обычно `22` |
+| `VPS_PORT` | SSH-порт; необязателен, по умолчанию `22` |
 | `VPS_USER` | SSH-пользователь для деплоя |
 | `VPS_DEPLOY_PATH` | Полный путь к клону, например `/opt/lexibot` |
 | `VPS_SSH_KEY` | Полное содержимое приватного `lexibot_deploy_key` |
