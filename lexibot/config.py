@@ -10,6 +10,8 @@ class Config:
     database_url: str
     openai_api_key: str
     openai_model: str
+    reminder_timezone: str
+    reminder_check_interval_seconds: int
 
 
 def load_config() -> Config:
@@ -23,9 +25,12 @@ def load_config() -> Config:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY не задан. Добавьте ключ OpenAI API в .env.")
+    reminder_check_interval = int(os.getenv("REMINDER_CHECK_INTERVAL_SECONDS", "60").strip())
     return Config(
         bot_token=token,
         database_url=database_url,
         openai_api_key=api_key,
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-nano").strip(),
+        reminder_timezone=os.getenv("REMINDER_TIMEZONE", "Europe/Moscow").strip(),
+        reminder_check_interval_seconds=max(5, reminder_check_interval),
     )

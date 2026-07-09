@@ -18,14 +18,24 @@ from lexibot.keyboards import (
     EDIT_BUTTON,
     ENGLISH_BUTTON,
     LIST_BUTTON,
+    SETTINGS_BUTTON,
     SPANISH_BUTTON,
     STUDY_BUTTON,
     cancel_menu,
     delete_keyboard,
     grade_keyboard,
     main_menu,
+    onboarding_goal_keyboard,
+    onboarding_language_keyboard,
+    onboarding_level_keyboard,
+    onboarding_reminder_keyboard,
     pronunciation_keyboard,
     reveal_keyboard,
+    settings_goal_keyboard,
+    settings_language_keyboard,
+    settings_level_keyboard,
+    settings_menu_keyboard,
+    settings_reminder_keyboard,
 )
 from lexibot.scheduler import schedule
 from lexibot.tts import synthesize_word
@@ -50,12 +60,32 @@ class DeleteCard(StatesGroup):
     confirm = State()
 
 
+class Onboarding(StatesGroup):
+    language = State()
+    goal = State()
+    level = State()
+    reminder = State()
+
+
 LEVEL_NAMES = {
     1: "новое",
     2: "плохо выучено",
     3: "хорошо выучено",
     4: "отлично · осталось 1 повторение",
     5: "выучено",
+}
+
+GOAL_NAMES = {
+    "work": "работа и бизнес",
+    "travel": "путешествия",
+    "media": "фильмы и сериалы",
+    "general": "общее обучение",
+}
+
+USER_LEVEL_NAMES = {
+    "beginner": "A1–A2 · начинаю",
+    "intermediate": "B1–B2 · уже говорю",
+    "advanced": "C1+ · продвинутый",
 }
 
 
@@ -84,15 +114,25 @@ def full_card(card: Card) -> str:
     return "\n\n".join(parts)
 
 
+def settings_text(settings) -> str:
+    reminder = settings.reminder_time or "выключены"
+    return (
+        "⚙️ Настройки обучения\n\n"
+        f"Язык: {LANGUAGE_NAMES[settings.language]}\n"
+        f"Цель: {GOAL_NAMES.get(settings.learning_goal, settings.learning_goal)}\n"
+        f"Уровень: {USER_LEVEL_NAMES.get(settings.learning_level, settings.learning_level)}\n"
+        f"Напоминания: {reminder}\n\n"
+        "Что хочешь изменить?"
+    )
+
+
 def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
     router = Router()
 
     async def language(user_id: int) -> str:
         return await repo.get_language(user_id)
 
-    @router.message(CommandStart())
-    @router.message(Command("help"))
-    async def help_command(message: Message) -> None:
+    async def send_help(message: Message) -> None:
         active = LANGUAGE_NAMES[await language(message.from_user.id)]
         await message.answer(
             "Я создаю словарные карточки с помощью ИИ и помогаю их повторять.\n\n"
@@ -103,9 +143,221 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
             "/study — начать повторение\n"
             "/edit — изменить и заново сгенерировать карточку\n"
             "/delete — удалить карточку\n"
+            "/settings — настройки обучения\n"
             "/cancel — отменить ввод",
             reply_markup=main_menu(),
         )
+
+    async def begin_onboarding(message: Message, state: FSMContext, restart: bool = False) -> None:
+        await state.clear()
+        await state.set_state(Onboarding.language)
+        intro = (
+            "Давай быстро настроим твой личный словарь — займёт меньше минуты.\n\n"
+            "Как это работает:\n"
+            "1) выбираешь язык;\n"
+            "2) добавляешь слово и короткий комментарий;\n"
+            "3) бот сам создаёт пример, объяснение, перевод и озвучку;\n"
+            "4) кнопка 🎓 Учить показывает слова, которые пора повторить."
+        )
+        if restart:
+            intro = "Окей, перенастроим обучение.\n\n" + intro
+        await message.answer(
+            intro + "\n\nС какого языка начнём?",
+            reply_markup=onboarding_language_keyboard(),
+        )
+
+    @router.message(CommandStart())
+    async def start_command(message: Message, state: FSMContext) -> None:
+        settings = await repo.get_settings(message.from_user.id)
+        if not settings.onboarding_completed:
+            await begin_onboarding(message, state)
+            return
+        await send_help(message)
+
+    @router.message(Command("help"))
+    async def help_command(message: Message) -> None:
+        await send_help(message)
+
+    async def answer_settings(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        settings = await repo.get_settings(message.from_user.id)
+        await message.answer(
+            settings_text(settings),
+            reply_markup=settings_menu_keyboard(),
+        )
+
+    async def edit_settings(callback: CallbackQuery) -> None:
+        settings = await repo.get_settings(callback.from_user.id)
+        await callback.message.edit_text(
+            settings_text(settings),
+            reply_markup=settings_menu_keyboard(),
+        )
+
+    @router.message(Command("settings"))
+    @router.message(F.text == SETTINGS_BUTTON)
+    async def settings_command(message: Message, state: FSMContext) -> None:
+        await answer_settings(message, state)
+
+    @router.callback_query(F.data == "settings:edit:language")
+    async def settings_edit_language(callback: CallbackQuery) -> None:
+        await callback.message.edit_text(
+            "Какой язык тренируем?",
+            reply_markup=settings_language_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == "settings:edit:goal")
+    async def settings_edit_goal(callback: CallbackQuery) -> None:
+        await callback.message.edit_text(
+            "Какая главная цель обучения?",
+            reply_markup=settings_goal_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == "settings:edit:level")
+    async def settings_edit_level(callback: CallbackQuery) -> None:
+        await callback.message.edit_text(
+            "Какой у тебя сейчас уровень?",
+            reply_markup=settings_level_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == "settings:edit:reminder")
+    async def settings_edit_reminder(callback: CallbackQuery) -> None:
+        await callback.message.edit_text(
+            "Когда удобно напоминать о повторении?",
+            reply_markup=settings_reminder_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data == "settings:back")
+    async def settings_back(callback: CallbackQuery) -> None:
+        await edit_settings(callback)
+        await callback.answer()
+
+    @router.callback_query(F.data == "settings:close")
+    async def settings_close(callback: CallbackQuery) -> None:
+        await callback.message.edit_text("Настройки закрыты ✅")
+        await callback.message.answer("Выбери следующее действие:", reply_markup=main_menu())
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("settings:language:"))
+    async def settings_save_language(callback: CallbackQuery) -> None:
+        code = callback.data.split(":", 2)[2]
+        if code not in LANGUAGE_NAMES:
+            await callback.answer("Неизвестный язык", show_alert=True)
+            return
+        await repo.set_language(callback.from_user.id, code)
+        await edit_settings(callback)
+        await callback.answer("Язык обновлён")
+
+    @router.callback_query(F.data.startswith("settings:goal:"))
+    async def settings_save_goal(callback: CallbackQuery) -> None:
+        goal = callback.data.split(":", 2)[2]
+        if goal not in GOAL_NAMES:
+            await callback.answer("Неизвестная цель", show_alert=True)
+            return
+        await repo.set_learning_goal(callback.from_user.id, goal)
+        await edit_settings(callback)
+        await callback.answer("Цель обновлена")
+
+    @router.callback_query(F.data.startswith("settings:level:"))
+    async def settings_save_level(callback: CallbackQuery) -> None:
+        level = callback.data.split(":", 2)[2]
+        if level not in USER_LEVEL_NAMES:
+            await callback.answer("Неизвестный уровень", show_alert=True)
+            return
+        await repo.set_learning_level(callback.from_user.id, level)
+        await edit_settings(callback)
+        await callback.answer("Уровень обновлён")
+
+    @router.callback_query(F.data.startswith("settings:reminder:"))
+    async def settings_save_reminder(callback: CallbackQuery) -> None:
+        reminder = callback.data.split(":", 2)[2]
+        reminder_time = None if reminder == "off" else reminder
+        await repo.set_reminder_time(callback.from_user.id, reminder_time)
+        await edit_settings(callback)
+        await callback.answer("Напоминание обновлено")
+
+    @router.callback_query(Onboarding.language, F.data.startswith("onboarding:language:"))
+    async def onboarding_language(callback: CallbackQuery, state: FSMContext) -> None:
+        code = callback.data.split(":", 2)[2]
+        if code not in LANGUAGE_NAMES:
+            await callback.answer("Неизвестный язык", show_alert=True)
+            return
+        await state.update_data(language=code)
+        await state.set_state(Onboarding.goal)
+        await callback.message.edit_text(
+            f"Отлично, режим: {LANGUAGE_NAMES[code]}.\n\n"
+            "Какая главная цель у твоего словаря?",
+            reply_markup=onboarding_goal_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(Onboarding.goal, F.data.startswith("onboarding:goal:"))
+    async def onboarding_goal(callback: CallbackQuery, state: FSMContext) -> None:
+        goal = callback.data.split(":", 2)[2]
+        if goal not in GOAL_NAMES:
+            await callback.answer("Неизвестная цель", show_alert=True)
+            return
+        await state.update_data(learning_goal=goal)
+        await state.set_state(Onboarding.level)
+        await callback.message.edit_text(
+            f"Цель: {GOAL_NAMES[goal]}.\n\n"
+            "Какой у тебя сейчас уровень?",
+            reply_markup=onboarding_level_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(Onboarding.level, F.data.startswith("onboarding:level:"))
+    async def onboarding_level(callback: CallbackQuery, state: FSMContext) -> None:
+        level = callback.data.split(":", 2)[2]
+        if level not in USER_LEVEL_NAMES:
+            await callback.answer("Неизвестный уровень", show_alert=True)
+            return
+        await state.update_data(learning_level=level)
+        await state.set_state(Onboarding.reminder)
+        await callback.message.edit_text(
+            f"Уровень: {USER_LEVEL_NAMES[level]}.\n\n"
+            "Когда удобно напоминать о повторении?",
+            reply_markup=onboarding_reminder_keyboard(),
+        )
+        await callback.answer()
+
+    @router.callback_query(Onboarding.reminder, F.data.startswith("onboarding:reminder:"))
+    async def onboarding_reminder(callback: CallbackQuery, state: FSMContext) -> None:
+        reminder = callback.data.split(":", 2)[2]
+        reminder_time = None if reminder == "off" else reminder
+        data = await state.get_data()
+        selected_language = data.get("language", "en")
+        learning_goal = data.get("learning_goal", "general")
+        learning_level = data.get("learning_level", "beginner")
+        await repo.save_onboarding(
+            callback.from_user.id,
+            selected_language,
+            learning_goal,
+            learning_level,
+            reminder_time,
+        )
+        await state.clear()
+        reminder_text = reminder_time or "без напоминаний"
+        await callback.message.edit_text(
+            "Готово, словарь настроен ✅\n\n"
+            f"Язык: {LANGUAGE_NAMES[selected_language]}\n"
+            f"Цель: {GOAL_NAMES[learning_goal]}\n"
+            f"Уровень: {USER_LEVEL_NAMES[learning_level]}\n"
+            f"Напоминания: {reminder_text}\n\n"
+            "Мини-инструкция:\n"
+            "• ➕ Добавить — отправь слово и комментарий, я сделаю карточку.\n"
+            "• 🎓 Учить — повторяй слова, когда подойдёт срок.\n"
+            "• 📚 Словарь — смотри все сохранённые слова.\n"
+            "• ⚙️ Настройки — измени язык, цель, уровень или время."
+        )
+        await callback.message.answer(
+            "Попробуй начать с кнопки ➕ Добавить: введи первое слово, которое хочешь запомнить.",
+            reply_markup=main_menu(),
+        )
+        await callback.answer()
 
     @router.message(Command("cancel"))
     @router.message(F.text == CANCEL_BUTTON)

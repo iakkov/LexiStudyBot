@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import asyncpg
 
@@ -26,6 +26,24 @@ class Card:
     example: str = ""
     explanation: str = ""
     comment: str = ""
+
+
+@dataclass(frozen=True)
+class UserSettings:
+    user_id: int
+    language: str = "en"
+    onboarding_completed: bool = False
+    learning_goal: str = "general"
+    learning_level: str = "beginner"
+    reminder_time: str | None = None
+    last_reminder_sent_on: date | None = None
+
+
+@dataclass(frozen=True)
+class ReminderCandidate:
+    user_id: int
+    language: str
+    due_count: int
 
 
 class CardRepository:
@@ -70,6 +88,24 @@ class CardRepository:
                     language TEXT NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'es'))
                 )
             """)
+            await connection.execute(
+                """ALTER TABLE user_settings
+                   ADD COLUMN IF NOT EXISTS onboarding_completed BOOLEAN NOT NULL DEFAULT FALSE"""
+            )
+            await connection.execute(
+                """ALTER TABLE user_settings
+                   ADD COLUMN IF NOT EXISTS learning_goal TEXT NOT NULL DEFAULT 'general'"""
+            )
+            await connection.execute(
+                """ALTER TABLE user_settings
+                   ADD COLUMN IF NOT EXISTS learning_level TEXT NOT NULL DEFAULT 'beginner'"""
+            )
+            await connection.execute(
+                "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS reminder_time TEXT"
+            )
+            await connection.execute(
+                "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS last_reminder_sent_on DATE"
+            )
             await connection.execute("DROP INDEX IF EXISTS idx_cards_user_word")
             await connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_user_word
@@ -177,12 +213,120 @@ class CardRepository:
             )
         return value or "en"
 
+    async def get_settings(self, user_id: int) -> UserSettings:
+        async with self._pool().acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT * FROM user_settings WHERE user_id = $1", user_id
+            )
+        if not row:
+            return UserSettings(user_id=user_id)
+        return UserSettings(
+            user_id=row["user_id"],
+            language=row["language"],
+            onboarding_completed=row["onboarding_completed"],
+            learning_goal=row["learning_goal"],
+            learning_level=row["learning_level"],
+            reminder_time=row["reminder_time"],
+            last_reminder_sent_on=row["last_reminder_sent_on"],
+        )
+
     async def set_language(self, user_id: int, language: str) -> None:
         async with self._pool().acquire() as connection:
             await connection.execute(
                 """INSERT INTO user_settings (user_id, language) VALUES ($1, $2)
                    ON CONFLICT (user_id) DO UPDATE SET language = EXCLUDED.language""",
                 user_id, language,
+            )
+
+    async def set_learning_goal(self, user_id: int, learning_goal: str) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO user_settings (user_id, learning_goal)
+                   VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       learning_goal = EXCLUDED.learning_goal""",
+                user_id, learning_goal,
+            )
+
+    async def set_learning_level(self, user_id: int, learning_level: str) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO user_settings (user_id, learning_level)
+                   VALUES ($1, $2)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       learning_level = EXCLUDED.learning_level""",
+                user_id, learning_level,
+            )
+
+    async def set_reminder_time(self, user_id: int, reminder_time: str | None) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO user_settings
+                   (user_id, reminder_time, last_reminder_sent_on)
+                   VALUES ($1, $2, NULL)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       reminder_time = EXCLUDED.reminder_time,
+                       last_reminder_sent_on = NULL""",
+                user_id, reminder_time,
+            )
+
+    async def save_onboarding(
+        self, user_id: int, language: str, learning_goal: str,
+        learning_level: str, reminder_time: str | None,
+    ) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO user_settings
+                   (user_id, language, onboarding_completed, learning_goal,
+                    learning_level, reminder_time)
+                   VALUES ($1, $2, TRUE, $3, $4, $5)
+                   ON CONFLICT (user_id) DO UPDATE SET
+                       language = EXCLUDED.language,
+                       onboarding_completed = TRUE,
+                       learning_goal = EXCLUDED.learning_goal,
+                       learning_level = EXCLUDED.learning_level,
+                       reminder_time = EXCLUDED.reminder_time,
+                       last_reminder_sent_on = NULL""",
+                user_id, language, learning_goal, learning_level, reminder_time,
+            )
+
+    async def reminder_candidates(
+        self, current_time: str, current_date: date, limit: int = 100,
+    ) -> list[ReminderCandidate]:
+        async with self._pool().acquire() as connection:
+            rows = await connection.fetch(
+                """SELECT us.user_id, us.language, count(c.id)::int AS due_count
+                   FROM user_settings us
+                   JOIN cards c ON c.user_id = us.user_id
+                    AND c.language = us.language
+                    AND c.learning_level < 5
+                    AND c.due_at <= $3
+                   WHERE us.onboarding_completed = TRUE
+                    AND us.reminder_time IS NOT NULL
+                    AND us.reminder_time <= $1
+                    AND (
+                        us.last_reminder_sent_on IS NULL
+                        OR us.last_reminder_sent_on < $2
+                    )
+                   GROUP BY us.user_id, us.language, us.reminder_time
+                   ORDER BY us.reminder_time, us.user_id
+                   LIMIT $4""",
+                current_time, current_date, utc_now(), limit,
+            )
+        return [
+            ReminderCandidate(
+                user_id=row["user_id"], language=row["language"], due_count=row["due_count"]
+            )
+            for row in rows
+        ]
+
+    async def mark_reminder_sent(self, user_id: int, sent_on: date) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """UPDATE user_settings
+                   SET last_reminder_sent_on = $1
+                   WHERE user_id = $2""",
+                sent_on, user_id,
             )
 
     async def save_review(
