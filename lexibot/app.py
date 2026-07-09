@@ -19,7 +19,7 @@ async def main() -> None:
     generator = CardGenerator(config.openai_api_key, config.openai_model)
 
     dispatcher = Dispatcher()
-    dispatcher.include_router(create_router(repo, generator))
+    dispatcher.include_router(create_router(repo, generator, config.reminder_timezone))
     bot = Bot(config.bot_token)
     reminders_task = asyncio.create_task(
         reminder_loop(

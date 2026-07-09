@@ -9,6 +9,7 @@ from aiogram.types import (
 ADD_BUTTON = "➕ Добавить"
 LIST_BUTTON = "📚 Словарь"
 STUDY_BUTTON = "🎓 Учить"
+STATS_BUTTON = "📊 Статистика"
 EDIT_BUTTON = "✏️ Изменить"
 DELETE_BUTTON = "🗑 Удалить"
 SETTINGS_BUTTON = "⚙️ Настройки"
@@ -21,7 +22,7 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ADD_BUTTON), KeyboardButton(text=STUDY_BUTTON)],
-            [KeyboardButton(text=LIST_BUTTON)],
+            [KeyboardButton(text=LIST_BUTTON), KeyboardButton(text=STATS_BUTTON)],
             [KeyboardButton(text=EDIT_BUTTON), KeyboardButton(text=DELETE_BUTTON)],
             [KeyboardButton(text=SETTINGS_BUTTON)],
             [KeyboardButton(text=ENGLISH_BUTTON), KeyboardButton(text=SPANISH_BUTTON)],
