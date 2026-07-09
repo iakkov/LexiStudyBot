@@ -40,9 +40,9 @@ def cancel_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def reveal_keyboard(card_id: int) -> InlineKeyboardMarkup:
+def reveal_keyboard(card_id: int, study_mode: str = "word_to_translation") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}")],
+        [InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}:{study_mode}")],
         [InlineKeyboardButton(text="🔊 Произнести", callback_data=f"pronounce:{card_id}")],
     ])
 
