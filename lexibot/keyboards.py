@@ -86,7 +86,7 @@ def onboarding_goal_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💼 Работа и бизнес", callback_data="onboarding:goal:work")],
         [InlineKeyboardButton(text="✈️ Путешествия", callback_data="onboarding:goal:travel")],
-        [InlineKeyboardButton(text="🎬 Фильмы и сериалы", callback_data="onboarding:goal:media")],
+        [InlineKeyboardButton(text="🎓 Подготовка к экзамену", callback_data="onboarding:goal:exam")],
         [InlineKeyboardButton(text="🌱 Просто учу для себя", callback_data="onboarding:goal:general")],
     ])
 
@@ -134,7 +134,7 @@ def settings_goal_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💼 Работа и бизнес", callback_data="settings:goal:work")],
         [InlineKeyboardButton(text="✈️ Путешествия", callback_data="settings:goal:travel")],
-        [InlineKeyboardButton(text="🎬 Фильмы и сериалы", callback_data="settings:goal:media")],
+        [InlineKeyboardButton(text="🎓 Подготовка к экзамену", callback_data="settings:goal:exam")],
         [InlineKeyboardButton(text="🌱 Просто учу для себя", callback_data="settings:goal:general")],
         [InlineKeyboardButton(text="← Назад", callback_data="settings:back")],
     ])

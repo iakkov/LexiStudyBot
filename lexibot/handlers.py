@@ -80,7 +80,8 @@ LEVEL_NAMES = {
 GOAL_NAMES = {
     "work": "работа и бизнес",
     "travel": "путешествия",
-    "media": "фильмы и сериалы",
+    "exam": "подготовка к экзамену",
+    "media": "подготовка к экзамену",
     "general": "общее обучение",
 }
 
@@ -469,9 +470,16 @@ def create_router(
         data = await state.get_data()
         comment = "" if message.text.strip() == "-" else message.text.strip()
         active_language = await language(message.from_user.id)
+        settings = await repo.get_settings(message.from_user.id)
         waiting = await message.answer("Создаю карточку с помощью ИИ… ✨")
         try:
-            generated = await generator.generate(data["word"], active_language, comment)
+            generated = await generator.generate(
+                data["word"],
+                active_language,
+                comment,
+                settings.learning_goal,
+                settings.learning_level,
+            )
             created = await repo.add(
                 message.from_user.id,
                 generated.normalized_word,
@@ -575,9 +583,16 @@ def create_router(
         data = await state.get_data()
         comment = data["old_comment"] if message.text.strip() == "-" else message.text.strip()
         active_language = await language(message.from_user.id)
+        settings = await repo.get_settings(message.from_user.id)
         waiting = await message.answer("Обновляю карточку с помощью ИИ… ✨")
         try:
-            generated = await generator.generate(data["word"], active_language, comment)
+            generated = await generator.generate(
+                data["word"],
+                active_language,
+                comment,
+                settings.learning_goal,
+                settings.learning_level,
+            )
             updated = await repo.update(
                 data["card_id"], message.from_user.id, generated.normalized_word,
                 generated.translation, generated.example, generated.explanation, comment,
