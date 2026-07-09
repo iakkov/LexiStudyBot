@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import asyncpg
 
@@ -44,6 +44,16 @@ class ReminderCandidate:
     user_id: int
     language: str
     due_count: int
+
+
+@dataclass(frozen=True)
+class CardStats:
+    total: int = 0
+    new: int = 0
+    weak: int = 0
+    good: int = 0
+    almost_learned: int = 0
+    learned: int = 0
 
 
 class CardRepository:
@@ -106,6 +116,14 @@ class CardRepository:
             await connection.execute(
                 "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS last_reminder_sent_on DATE"
             )
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS study_days (
+                    user_id BIGINT NOT NULL,
+                    studied_on DATE NOT NULL,
+                    reviews_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, studied_on)
+                )
+            """)
             await connection.execute("DROP INDEX IF EXISTS idx_cards_user_word")
             await connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_user_word
@@ -113,6 +131,9 @@ class CardRepository:
             )
             await connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cards_due ON cards(user_id, due_at)"
+            )
+            await connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_study_days_user_date ON study_days(user_id, studied_on)"
             )
 
     async def close(self) -> None:
@@ -328,6 +349,79 @@ class CardRepository:
                    WHERE user_id = $2""",
                 sent_on, user_id,
             )
+
+    async def card_stats(self, user_id: int, language: str) -> CardStats:
+        async with self._pool().acquire() as connection:
+            row = await connection.fetchrow(
+                """SELECT
+                       count(*)::int AS total,
+                       count(*) FILTER (WHERE learning_level = 1)::int AS new,
+                       count(*) FILTER (WHERE learning_level = 2)::int AS weak,
+                       count(*) FILTER (WHERE learning_level = 3)::int AS good,
+                       count(*) FILTER (WHERE learning_level = 4)::int AS almost_learned,
+                       count(*) FILTER (WHERE learning_level = 5)::int AS learned
+                   FROM cards
+                   WHERE user_id = $1 AND language = $2""",
+                user_id, language,
+            )
+        return CardStats(
+            total=row["total"],
+            new=row["new"],
+            weak=row["weak"],
+            good=row["good"],
+            almost_learned=row["almost_learned"],
+            learned=row["learned"],
+        )
+
+    async def record_study_day(self, user_id: int, studied_on: date) -> None:
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO study_days (user_id, studied_on, reviews_count)
+                   VALUES ($1, $2, 1)
+                   ON CONFLICT (user_id, studied_on) DO UPDATE SET
+                       reviews_count = study_days.reviews_count + 1""",
+                user_id, studied_on,
+            )
+
+    async def studied_on(self, user_id: int, studied_on: date) -> bool:
+        async with self._pool().acquire() as connection:
+            value = await connection.fetchval(
+                """SELECT EXISTS(
+                       SELECT 1 FROM study_days
+                       WHERE user_id = $1 AND studied_on = $2
+                   )""",
+                user_id, studied_on,
+            )
+        return bool(value)
+
+    async def streak_days(self, user_id: int, current_date: date) -> int:
+        async with self._pool().acquire() as connection:
+            rows = await connection.fetch(
+                """SELECT studied_on
+                   FROM study_days
+                   WHERE user_id = $1 AND studied_on <= $2
+                   ORDER BY studied_on DESC""",
+                user_id, current_date,
+            )
+        if not rows:
+            return 0
+        first_day = rows[0]["studied_on"]
+        if first_day == current_date:
+            expected = current_date
+        elif first_day == current_date - timedelta(days=1):
+            expected = current_date - timedelta(days=1)
+        else:
+            return 0
+        streak = 0
+        for row in rows:
+            studied_on = row["studied_on"]
+            if studied_on == expected:
+                streak += 1
+                expected = expected - timedelta(days=1)
+                continue
+            if studied_on < expected:
+                break
+        return streak
 
     async def save_review(
         self, card_id: int, user_id: int, repetitions: int,

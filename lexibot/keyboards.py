@@ -9,6 +9,7 @@ from aiogram.types import (
 ADD_BUTTON = "➕ Добавить"
 LIST_BUTTON = "📚 Словарь"
 STUDY_BUTTON = "🎓 Учить"
+STATS_BUTTON = "📊 Статистика"
 EDIT_BUTTON = "✏️ Изменить"
 DELETE_BUTTON = "🗑 Удалить"
 SETTINGS_BUTTON = "⚙️ Настройки"
@@ -21,7 +22,7 @@ def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=ADD_BUTTON), KeyboardButton(text=STUDY_BUTTON)],
-            [KeyboardButton(text=LIST_BUTTON)],
+            [KeyboardButton(text=LIST_BUTTON), KeyboardButton(text=STATS_BUTTON)],
             [KeyboardButton(text=EDIT_BUTTON), KeyboardButton(text=DELETE_BUTTON)],
             [KeyboardButton(text=SETTINGS_BUTTON)],
             [KeyboardButton(text=ENGLISH_BUTTON), KeyboardButton(text=SPANISH_BUTTON)],
@@ -40,9 +41,9 @@ def cancel_menu() -> ReplyKeyboardMarkup:
     )
 
 
-def reveal_keyboard(card_id: int) -> InlineKeyboardMarkup:
+def reveal_keyboard(card_id: int, study_mode: str = "word_to_translation") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}")],
+        [InlineKeyboardButton(text="Показать ответ", callback_data=f"reveal:{card_id}:{study_mode}")],
         [InlineKeyboardButton(text="🔊 Произнести", callback_data=f"pronounce:{card_id}")],
     ])
 
@@ -85,7 +86,7 @@ def onboarding_goal_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💼 Работа и бизнес", callback_data="onboarding:goal:work")],
         [InlineKeyboardButton(text="✈️ Путешествия", callback_data="onboarding:goal:travel")],
-        [InlineKeyboardButton(text="🎬 Фильмы и сериалы", callback_data="onboarding:goal:media")],
+        [InlineKeyboardButton(text="🎓 Подготовка к экзамену", callback_data="onboarding:goal:exam")],
         [InlineKeyboardButton(text="🌱 Просто учу для себя", callback_data="onboarding:goal:general")],
     ])
 
@@ -133,7 +134,7 @@ def settings_goal_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💼 Работа и бизнес", callback_data="settings:goal:work")],
         [InlineKeyboardButton(text="✈️ Путешествия", callback_data="settings:goal:travel")],
-        [InlineKeyboardButton(text="🎬 Фильмы и сериалы", callback_data="settings:goal:media")],
+        [InlineKeyboardButton(text="🎓 Подготовка к экзамену", callback_data="settings:goal:exam")],
         [InlineKeyboardButton(text="🌱 Просто учу для себя", callback_data="settings:goal:general")],
         [InlineKeyboardButton(text="← Назад", callback_data="settings:back")],
     ])

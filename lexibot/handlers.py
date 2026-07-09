@@ -2,6 +2,7 @@ import logging
 import re
 from datetime import datetime, timezone
 from html import escape
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
@@ -20,6 +21,7 @@ from lexibot.keyboards import (
     LIST_BUTTON,
     SETTINGS_BUTTON,
     SPANISH_BUTTON,
+    STATS_BUTTON,
     STUDY_BUTTON,
     cancel_menu,
     delete_keyboard,
@@ -78,7 +80,8 @@ LEVEL_NAMES = {
 GOAL_NAMES = {
     "work": "работа и бизнес",
     "travel": "путешествия",
-    "media": "фильмы и сериалы",
+    "exam": "подготовка к экзамену",
+    "media": "подготовка к экзамену",
     "general": "общее обучение",
 }
 
@@ -87,6 +90,10 @@ USER_LEVEL_NAMES = {
     "intermediate": "B1–B2 · уже говорю",
     "advanced": "C1+ · продвинутый",
 }
+
+
+def streak_badge(today_done: bool) -> str:
+    return "🔥" if today_done else "⚪"
 
 
 def highlight_word(text: str, word: str) -> str:
@@ -126,11 +133,42 @@ def settings_text(settings) -> str:
     )
 
 
-def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
+def create_router(
+    repo: CardRepository, generator: CardGenerator, timezone_name: str = "Europe/Moscow",
+) -> Router:
     router = Router()
+    try:
+        user_timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown user timezone %s, falling back to UTC", timezone_name)
+        user_timezone = ZoneInfo("UTC")
 
     async def language(user_id: int) -> str:
         return await repo.get_language(user_id)
+
+    def local_today():
+        return datetime.now(user_timezone).date()
+
+    async def streak_line(user_id: int) -> str:
+        today = local_today()
+        today_done = await repo.studied_on(user_id, today)
+        streak = await repo.streak_days(user_id, today)
+        return f"{streak_badge(today_done)} Серия дней подряд: {streak}"
+
+    async def stats_text(user_id: int) -> str:
+        active_language = await language(user_id)
+        stats = await repo.card_stats(user_id, active_language)
+        return (
+            f"📊 <b>Статистика · {LANGUAGE_NAMES[active_language]}</b>\n\n"
+            f"Всего слов добавлено: <b>{stats.total}</b>\n"
+            f"Новых: <b>{stats.new}</b>\n"
+            f"Плохо выученных: <b>{stats.weak}</b>\n"
+            f"Хорошо: <b>{stats.good}</b>\n"
+            f"Почти выучено: <b>{stats.almost_learned}</b>\n"
+            f"Выучено: <b>{stats.learned}</b>\n\n"
+            f"{await streak_line(user_id)}\n\n"
+            "День засчитывается, когда ты повторил хотя бы одну карточку."
+        )
 
     async def send_help(message: Message) -> None:
         active = LANGUAGE_NAMES[await language(message.from_user.id)]
@@ -141,6 +179,7 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
             "/addnew — добавить слово и свой комментарий\n"
             "/list — показать словарь выбранного языка\n"
             "/study — начать повторение\n"
+            "/stats — статистика и серия дней\n"
             "/edit — изменить и заново сгенерировать карточку\n"
             "/delete — удалить карточку\n"
             "/settings — настройки обучения\n"
@@ -177,6 +216,23 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
     @router.message(Command("help"))
     async def help_command(message: Message) -> None:
         await send_help(message)
+
+    async def send_stats(message: Message, state: FSMContext | None = None) -> None:
+        if state:
+            await state.clear()
+        await message.answer(
+            await stats_text(message.from_user.id),
+            parse_mode="HTML",
+            reply_markup=main_menu(),
+        )
+
+    @router.message(Command("stats"))
+    async def stats_command(message: Message) -> None:
+        await send_stats(message)
+
+    @router.message(F.text == STATS_BUTTON)
+    async def stats_from_menu(message: Message, state: FSMContext) -> None:
+        await send_stats(message, state)
 
     async def answer_settings(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -414,9 +470,16 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
         data = await state.get_data()
         comment = "" if message.text.strip() == "-" else message.text.strip()
         active_language = await language(message.from_user.id)
+        settings = await repo.get_settings(message.from_user.id)
         waiting = await message.answer("Создаю карточку с помощью ИИ… ✨")
         try:
-            generated = await generator.generate(data["word"], active_language, comment)
+            generated = await generator.generate(
+                data["word"],
+                active_language,
+                comment,
+                settings.learning_goal,
+                settings.learning_level,
+            )
             created = await repo.add(
                 message.from_user.id,
                 generated.normalized_word,
@@ -520,9 +583,16 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
         data = await state.get_data()
         comment = data["old_comment"] if message.text.strip() == "-" else message.text.strip()
         active_language = await language(message.from_user.id)
+        settings = await repo.get_settings(message.from_user.id)
         waiting = await message.answer("Обновляю карточку с помощью ИИ… ✨")
         try:
-            generated = await generator.generate(data["word"], active_language, comment)
+            generated = await generator.generate(
+                data["word"],
+                active_language,
+                comment,
+                settings.learning_goal,
+                settings.learning_level,
+            )
             updated = await repo.update(
                 data["card_id"], message.from_user.id, generated.normalized_word,
                 generated.translation, generated.example, generated.explanation, comment,
@@ -590,8 +660,10 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
         active_language = await language(user_id)
         cards = await repo.due(user_id, active_language, limit=1)
         if not cards:
+            streak = await streak_line(user_id)
             await message.answer(
-                f"На сегодня в разделе {LANGUAGE_NAMES[active_language]} всё 🎉"
+                f"На сегодня в разделе {LANGUAGE_NAMES[active_language]} всё 🎉\n\n"
+                f"{streak}"
             )
             return
         card = cards[0]
@@ -651,6 +723,7 @@ def create_router(repo: CardRepository, generator: CardGenerator) -> Router:
             result.interval_days, result.ease_factor, result.due_at,
             result.learning_level,
         )
+        await repo.record_study_day(callback.from_user.id, local_today())
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer("Оценка сохранена")
         await show_next(callback.message, callback.from_user.id)

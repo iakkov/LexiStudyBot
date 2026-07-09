@@ -20,3 +20,23 @@ def test_reminder_message_uses_many_cards_form():
     message = reminder_message(ReminderCandidate(user_id=1, language="en", due_count=12))
 
     assert "12 карточек" in message
+
+
+def test_reminder_message_shows_gray_badge_before_daily_study():
+    message = reminder_message(
+        ReminderCandidate(user_id=1, language="en", due_count=2),
+        streak_days=4,
+        today_done=False,
+    )
+
+    assert "⚪ Серия дней подряд: 4" in message
+
+
+def test_reminder_message_shows_fire_badge_after_daily_study():
+    message = reminder_message(
+        ReminderCandidate(user_id=1, language="en", due_count=2),
+        streak_days=5,
+        today_done=True,
+    )
+
+    assert "🔥 Серия дней подряд: 5" in message

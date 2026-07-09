@@ -15,17 +15,22 @@ from lexibot.keyboards import main_menu
 logger = logging.getLogger(__name__)
 
 
-def reminder_message(candidate: ReminderCandidate) -> str:
+def reminder_message(
+    candidate: ReminderCandidate, streak_days: int = 0, today_done: bool = False,
+) -> str:
     word_form = "карточек"
     if candidate.due_count % 10 == 1 and candidate.due_count % 100 != 11:
         word_form = "карточка"
     elif candidate.due_count % 10 in (2, 3, 4) and candidate.due_count % 100 not in (12, 13, 14):
         word_form = "карточки"
 
+    badge = "🔥" if today_done else "⚪"
+
     return (
         "⏰ Пора повторить слова\n\n"
         f"В разделе {LANGUAGE_NAMES[candidate.language]} готово к повторению: "
         f"{candidate.due_count} {word_form}.\n\n"
+        f"{badge} Серия дней подряд: {streak_days}\n\n"
         "Нажми 🎓 Учить — это займёт всего несколько минут."
     )
 
@@ -48,10 +53,12 @@ async def send_due_reminders(
 
     sent = 0
     for candidate in candidates:
+        today_done = await repo.studied_on(candidate.user_id, local_now.date())
+        streak = await repo.streak_days(candidate.user_id, local_now.date())
         try:
             await bot.send_message(
                 candidate.user_id,
-                reminder_message(candidate),
+                reminder_message(candidate, streak, today_done),
                 reply_markup=main_menu(),
             )
             sent += 1
