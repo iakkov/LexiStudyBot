@@ -1,4 +1,5 @@
 import logging
+import random
 import re
 from datetime import datetime, timezone
 from html import escape
@@ -91,6 +92,18 @@ USER_LEVEL_NAMES = {
     "advanced": "C1+ · продвинутый",
 }
 
+STUDY_MODES = (
+    "word_to_translation",
+    "translation_to_word",
+    "explanation_to_word",
+)
+
+STUDY_MODE_NAMES = {
+    "word_to_translation": "слово → перевод",
+    "translation_to_word": "перевод → слово",
+    "explanation_to_word": "объяснение → слово",
+}
+
 
 def streak_badge(today_done: bool) -> str:
     return "🔥" if today_done else "⚪"
@@ -119,6 +132,26 @@ def full_card(card: Card) -> str:
     if card.comment:
         parts.append(f"<b>Комментарий:</b> {escape(card.comment)}")
     return "\n\n".join(parts)
+
+
+def study_prompt(card: Card, study_mode: str) -> str:
+    if study_mode == "translation_to_word":
+        return (
+            "<b>Режим:</b> перевод → слово\n\n"
+            "Вспомни слово по переводу:\n\n"
+            f"<b>{escape(card.meaning)}</b>"
+        )
+    if study_mode == "explanation_to_word":
+        return (
+            "<b>Режим:</b> объяснение → слово\n\n"
+            "Вспомни слово по объяснению:\n\n"
+            f"<i>{escape(card.explanation)}</i>"
+        )
+    return (
+        "<b>Режим:</b> слово → перевод\n\n"
+        "Вспомни перевод:\n\n"
+        f"<b>{escape(card.word)}</b>"
+    )
 
 
 def settings_text(settings) -> str:
@@ -667,9 +700,10 @@ def create_router(
             )
             return
         card = cards[0]
+        study_mode = random.choice(STUDY_MODES)
         await message.answer(
-            f"Вспомни значение:\n\n<b>{escape(card.word)}</b>",
-            parse_mode="HTML", reply_markup=reveal_keyboard(card.id),
+            study_prompt(card, study_mode),
+            parse_mode="HTML", reply_markup=reveal_keyboard(card.id, study_mode),
         )
 
     @router.message(Command("study"))
@@ -683,12 +717,17 @@ def create_router(
 
     @router.callback_query(F.data.startswith("reveal:"))
     async def reveal(callback: CallbackQuery) -> None:
-        card = await repo.get(int(callback.data.split(":")[1]), callback.from_user.id)
+        parts = callback.data.split(":")
+        card = await repo.get(int(parts[1]), callback.from_user.id)
         if not card:
             await callback.answer("Карточка не найдена", show_alert=True)
             return
+        study_mode = parts[2] if len(parts) > 2 else "word_to_translation"
+        mode_name = STUDY_MODE_NAMES.get(study_mode, STUDY_MODE_NAMES["word_to_translation"])
         await callback.message.edit_text(
-            full_card(card) + "\n\n<b>Как вспомнилось?</b>",
+            f"<b>Режим:</b> {escape(mode_name)}\n\n"
+            + full_card(card)
+            + "\n\n<b>Как вспомнилось?</b>",
             parse_mode="HTML", reply_markup=grade_keyboard(card.id),
         )
         await callback.answer()
