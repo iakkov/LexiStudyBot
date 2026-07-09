@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 import asyncpg
 
@@ -54,6 +57,31 @@ class CardStats:
     good: int = 0
     almost_learned: int = 0
     learned: int = 0
+
+
+@dataclass(frozen=True)
+class ProductAnalytics:
+    total_users: int = 0
+    active_users_today: int = 0
+    active_users_7d: int = 0
+    started_today: int = 0
+    started_7d: int = 0
+    onboarding_completed_today: int = 0
+    onboarding_completed_7d: int = 0
+    cards_added_today: int = 0
+    cards_added_7d: int = 0
+    study_started_today: int = 0
+    study_started_7d: int = 0
+    cards_reviewed_today: int = 0
+    cards_reviewed_7d: int = 0
+    study_completed_today: int = 0
+    study_completed_7d: int = 0
+    reminders_sent_today: int = 0
+    reminders_sent_7d: int = 0
+    tts_clicked_today: int = 0
+    tts_clicked_7d: int = 0
+    settings_opened_today: int = 0
+    stats_opened_today: int = 0
 
 
 class CardRepository:
@@ -124,6 +152,15 @@ class CardRepository:
                     PRIMARY KEY (user_id, studied_on)
                 )
             """)
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS analytics_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    event_name TEXT NOT NULL,
+                    event_data JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL
+                )
+            """)
             await connection.execute("DROP INDEX IF EXISTS idx_cards_user_word")
             await connection.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_user_word
@@ -135,6 +172,15 @@ class CardRepository:
             await connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_study_days_user_date ON study_days(user_id, studied_on)"
             )
+            await connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_analytics_events_created_at ON analytics_events(created_at)"
+            )
+            await connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_analytics_events_name_created_at ON analytics_events(event_name, created_at)"
+            )
+            await connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_analytics_events_user_created_at ON analytics_events(user_id, created_at)"
+            )
 
     async def close(self) -> None:
         if self.pool:
@@ -144,6 +190,93 @@ class CardRepository:
         if not self.pool:
             raise RuntimeError("Репозиторий не инициализирован")
         return self.pool
+
+    async def track_event(
+        self, user_id: int | None, event_name: str,
+        event_data: Mapping[str, Any] | None = None,
+    ) -> None:
+        payload = json.dumps(dict(event_data or {}), ensure_ascii=False)
+        async with self._pool().acquire() as connection:
+            await connection.execute(
+                """INSERT INTO analytics_events
+                   (user_id, event_name, event_data, created_at)
+                   VALUES ($1, $2, $3::jsonb, $4)""",
+                user_id, event_name, payload, utc_now(),
+            )
+
+    async def product_analytics(self) -> ProductAnalytics:
+        async with self._pool().acquire() as connection:
+            row = await connection.fetchrow(
+                """WITH boundaries AS (
+                       SELECT
+                         date_trunc('day', now()) AS today_start,
+                         now() - interval '7 days' AS week_start
+                   )
+                   SELECT
+                     count(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL)::int AS total_users,
+                     count(DISTINCT user_id) FILTER (
+                       WHERE user_id IS NOT NULL AND created_at >= today_start
+                     )::int AS active_users_today,
+                     count(DISTINCT user_id) FILTER (
+                       WHERE user_id IS NOT NULL AND created_at >= week_start
+                     )::int AS active_users_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'bot_started' AND created_at >= today_start
+                     )::int AS started_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'bot_started' AND created_at >= week_start
+                     )::int AS started_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'onboarding_completed' AND created_at >= today_start
+                     )::int AS onboarding_completed_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'onboarding_completed' AND created_at >= week_start
+                     )::int AS onboarding_completed_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'card_added' AND created_at >= today_start
+                     )::int AS cards_added_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'card_added' AND created_at >= week_start
+                     )::int AS cards_added_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_started' AND created_at >= today_start
+                     )::int AS study_started_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_started' AND created_at >= week_start
+                     )::int AS study_started_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_card_reviewed' AND created_at >= today_start
+                     )::int AS cards_reviewed_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_card_reviewed' AND created_at >= week_start
+                     )::int AS cards_reviewed_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_completed' AND created_at >= today_start
+                     )::int AS study_completed_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'study_completed' AND created_at >= week_start
+                     )::int AS study_completed_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'reminder_sent' AND created_at >= today_start
+                     )::int AS reminders_sent_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'reminder_sent' AND created_at >= week_start
+                     )::int AS reminders_sent_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'tts_clicked' AND created_at >= today_start
+                     )::int AS tts_clicked_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'tts_clicked' AND created_at >= week_start
+                     )::int AS tts_clicked_7d,
+                     count(*) FILTER (
+                       WHERE event_name = 'settings_opened' AND created_at >= today_start
+                     )::int AS settings_opened_today,
+                     count(*) FILTER (
+                       WHERE event_name = 'stats_opened' AND created_at >= today_start
+                     )::int AS stats_opened_today
+                   FROM analytics_events, boundaries"""
+            )
+        return ProductAnalytics(**dict(row))
 
     async def add(
         self, user_id: int, word: str, translation: str, language: str,

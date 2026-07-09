@@ -167,9 +167,11 @@ def settings_text(settings) -> str:
 
 
 def create_router(
-    repo: CardRepository, generator: CardGenerator, timezone_name: str = "Europe/Moscow",
+    repo: CardRepository, generator: CardGenerator,
+    timezone_name: str = "Europe/Moscow", admin_user_ids: set[int] | None = None,
 ) -> Router:
     router = Router()
+    admin_user_ids = admin_user_ids or set()
     try:
         user_timezone = ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError:
@@ -201,6 +203,35 @@ def create_router(
             f"Выучено: <b>{stats.learned}</b>\n\n"
             f"{await streak_line(user_id)}\n\n"
             "День засчитывается, когда ты повторил хотя бы одну карточку."
+        )
+
+    async def admin_stats_text() -> str:
+        stats = await repo.product_analytics()
+        return (
+            "📈 <b>Product analytics</b>\n\n"
+            f"Пользователей всего: <b>{stats.total_users}</b>\n"
+            f"Активных сегодня: <b>{stats.active_users_today}</b>\n"
+            f"Активных за 7 дней: <b>{stats.active_users_7d}</b>\n\n"
+            "<b>Сегодня</b>\n"
+            f"Стартов: <b>{stats.started_today}</b>\n"
+            f"Онбордингов завершено: <b>{stats.onboarding_completed_today}</b>\n"
+            f"Карточек добавлено: <b>{stats.cards_added_today}</b>\n"
+            f"Сессий повторения начато: <b>{stats.study_started_today}</b>\n"
+            f"Карточек повторено: <b>{stats.cards_reviewed_today}</b>\n"
+            f"Сессий завершено: <b>{stats.study_completed_today}</b>\n"
+            f"Напоминаний отправлено: <b>{stats.reminders_sent_today}</b>\n"
+            f"TTS кликов: <b>{stats.tts_clicked_today}</b>\n"
+            f"Открытий настроек: <b>{stats.settings_opened_today}</b>\n"
+            f"Открытий статистики: <b>{stats.stats_opened_today}</b>\n\n"
+            "<b>За 7 дней</b>\n"
+            f"Стартов: <b>{stats.started_7d}</b>\n"
+            f"Онбордингов завершено: <b>{stats.onboarding_completed_7d}</b>\n"
+            f"Карточек добавлено: <b>{stats.cards_added_7d}</b>\n"
+            f"Сессий повторения начато: <b>{stats.study_started_7d}</b>\n"
+            f"Карточек повторено: <b>{stats.cards_reviewed_7d}</b>\n"
+            f"Сессий завершено: <b>{stats.study_completed_7d}</b>\n"
+            f"Напоминаний отправлено: <b>{stats.reminders_sent_7d}</b>\n"
+            f"TTS кликов: <b>{stats.tts_clicked_7d}</b>"
         )
 
     async def send_help(message: Message) -> None:
@@ -240,8 +271,10 @@ def create_router(
 
     @router.message(CommandStart())
     async def start_command(message: Message, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "bot_started")
         settings = await repo.get_settings(message.from_user.id)
         if not settings.onboarding_completed:
+            await repo.track_event(message.from_user.id, "onboarding_started")
             await begin_onboarding(message, state)
             return
         await send_help(message)
@@ -253,6 +286,7 @@ def create_router(
     async def send_stats(message: Message, state: FSMContext | None = None) -> None:
         if state:
             await state.clear()
+        await repo.track_event(message.from_user.id, "stats_opened")
         await message.answer(
             await stats_text(message.from_user.id),
             parse_mode="HTML",
@@ -266,6 +300,15 @@ def create_router(
     @router.message(F.text == STATS_BUTTON)
     async def stats_from_menu(message: Message, state: FSMContext) -> None:
         await send_stats(message, state)
+
+    @router.message(Command("admin_stats"))
+    async def admin_stats_command(message: Message) -> None:
+        if message.from_user.id not in admin_user_ids:
+            await repo.track_event(message.from_user.id, "admin_stats_denied")
+            await message.answer("Эта команда доступна только администратору.")
+            return
+        await repo.track_event(message.from_user.id, "admin_stats_opened")
+        await message.answer(await admin_stats_text(), parse_mode="HTML")
 
     async def answer_settings(message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -285,6 +328,7 @@ def create_router(
     @router.message(Command("settings"))
     @router.message(F.text == SETTINGS_BUTTON)
     async def settings_command(message: Message, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "settings_opened")
         await answer_settings(message, state)
 
     @router.callback_query(F.data == "settings:edit:language")
@@ -337,6 +381,7 @@ def create_router(
             await callback.answer("Неизвестный язык", show_alert=True)
             return
         await repo.set_language(callback.from_user.id, code)
+        await repo.track_event(callback.from_user.id, "language_changed", {"language": code})
         await edit_settings(callback)
         await callback.answer("Язык обновлён")
 
@@ -347,6 +392,7 @@ def create_router(
             await callback.answer("Неизвестная цель", show_alert=True)
             return
         await repo.set_learning_goal(callback.from_user.id, goal)
+        await repo.track_event(callback.from_user.id, "learning_goal_changed", {"goal": goal})
         await edit_settings(callback)
         await callback.answer("Цель обновлена")
 
@@ -357,6 +403,9 @@ def create_router(
             await callback.answer("Неизвестный уровень", show_alert=True)
             return
         await repo.set_learning_level(callback.from_user.id, level)
+        await repo.track_event(
+            callback.from_user.id, "learning_level_changed", {"level": level}
+        )
         await edit_settings(callback)
         await callback.answer("Уровень обновлён")
 
@@ -365,6 +414,9 @@ def create_router(
         reminder = callback.data.split(":", 2)[2]
         reminder_time = None if reminder == "off" else reminder
         await repo.set_reminder_time(callback.from_user.id, reminder_time)
+        await repo.track_event(
+            callback.from_user.id, "reminder_time_changed", {"reminder_time": reminder_time}
+        )
         await edit_settings(callback)
         await callback.answer("Напоминание обновлено")
 
@@ -428,6 +480,16 @@ def create_router(
             learning_level,
             reminder_time,
         )
+        await repo.track_event(
+            callback.from_user.id,
+            "onboarding_completed",
+            {
+                "language": selected_language,
+                "learning_goal": learning_goal,
+                "learning_level": learning_level,
+                "reminder_time": reminder_time,
+            },
+        )
         await state.clear()
         reminder_text = reminder_time or "без напоминаний"
         await callback.message.edit_text(
@@ -457,6 +519,7 @@ def create_router(
     async def select_language(message: Message, state: FSMContext, code: str) -> None:
         await state.clear()
         await repo.set_language(message.from_user.id, code)
+        await repo.track_event(message.from_user.id, "language_changed", {"language": code})
         await message.answer(
             f"Режим переключён: {LANGUAGE_NAMES[code]} ✅",
             reply_markup=main_menu(),
@@ -472,6 +535,11 @@ def create_router(
 
     async def begin_add(message: Message, state: FSMContext, initial_word: str = "") -> None:
         await state.clear()
+        await repo.track_event(
+            message.from_user.id,
+            "card_add_started",
+            {"has_initial_word": bool(initial_word)},
+        )
         if initial_word:
             await state.update_data(word=initial_word.strip())
             await state.set_state(AddCard.comment)
@@ -524,12 +592,22 @@ def create_router(
             )
         except Exception:
             logger.exception("Failed to generate a card")
+            await repo.track_event(
+                message.from_user.id,
+                "card_add_failed",
+                {"language": active_language, "word": data.get("word", "")},
+            )
             await waiting.edit_text(
                 "Не удалось создать карточку. Проверь OPENAI_API_KEY или попробуй позже."
             )
             return
         await state.clear()
         if not created:
+            await repo.track_event(
+                message.from_user.id,
+                "card_add_duplicate",
+                {"language": active_language, "word": generated.normalized_word},
+            )
             await waiting.edit_text("Такое слово уже есть в выбранном языке.")
             await message.answer("Выбери следующее действие:", reply_markup=main_menu())
             return
@@ -538,6 +616,11 @@ def create_router(
         )
         await waiting.edit_text(
             full_card(card), parse_mode="HTML", reply_markup=pronunciation_keyboard(card.id)
+        )
+        await repo.track_event(
+            message.from_user.id,
+            "card_added",
+            {"language": active_language, "word": generated.normalized_word},
         )
         await message.answer("Карточка добавлена ✅", reply_markup=main_menu())
 
@@ -566,11 +649,13 @@ def create_router(
 
     @router.message(Command("list"))
     async def list_cards(message: Message) -> None:
+        await repo.track_event(message.from_user.id, "list_opened")
         await send_list(message)
 
     @router.message(F.text == LIST_BUTTON)
     async def list_from_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
+        await repo.track_event(message.from_user.id, "list_opened")
         await send_list(message)
 
     async def begin_edit(message: Message, state: FSMContext, value: str = "") -> None:
@@ -583,10 +668,12 @@ def create_router(
 
     @router.message(Command("edit"))
     async def edit_start(message: Message, command: CommandObject, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "edit_clicked")
         await begin_edit(message, state, command.args or "")
 
     @router.message(F.text == EDIT_BUTTON)
     async def edit_from_menu(message: Message, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "edit_clicked")
         await begin_edit(message, state)
 
     async def edit_search_value(message: Message, state: FSMContext, value: str) -> None:
@@ -638,6 +725,11 @@ def create_router(
         await waiting.edit_text(
             "Карточка обновлена ✅" if updated else "Не удалось обновить: такое слово уже есть."
         )
+        await repo.track_event(
+            message.from_user.id,
+            "card_edited" if updated else "card_edit_failed",
+            {"language": active_language, "word": generated.normalized_word},
+        )
         await message.answer("Выбери следующее действие:", reply_markup=main_menu())
 
     async def begin_delete(message: Message, state: FSMContext, value: str = "") -> None:
@@ -650,10 +742,12 @@ def create_router(
 
     @router.message(Command("delete"))
     async def delete_start(message: Message, command: CommandObject, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "delete_clicked")
         await begin_delete(message, state, command.args or "")
 
     @router.message(F.text == DELETE_BUTTON)
     async def delete_from_menu(message: Message, state: FSMContext) -> None:
+        await repo.track_event(message.from_user.id, "delete_clicked")
         await begin_delete(message, state)
 
     async def delete_search_value(message: Message, state: FSMContext, value: str) -> None:
@@ -674,6 +768,7 @@ def create_router(
     @router.callback_query(F.data.startswith("delete_confirm:"))
     async def delete_confirm(callback: CallbackQuery, state: FSMContext) -> None:
         deleted = await repo.delete(int(callback.data.split(":")[1]), callback.from_user.id)
+        await repo.track_event(callback.from_user.id, "card_deleted" if deleted else "card_delete_failed")
         await state.clear()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
@@ -693,6 +788,7 @@ def create_router(
         active_language = await language(user_id)
         cards = await repo.due(user_id, active_language, limit=1)
         if not cards:
+            await repo.track_event(user_id, "study_completed", {"language": active_language})
             streak = await streak_line(user_id)
             await message.answer(
                 f"На сегодня в разделе {LANGUAGE_NAMES[active_language]} всё 🎉\n\n"
@@ -701,6 +797,11 @@ def create_router(
             return
         card = cards[0]
         study_mode = random.choice(STUDY_MODES)
+        await repo.track_event(
+            user_id,
+            "study_card_shown",
+            {"language": active_language, "study_mode": study_mode, "card_id": card.id},
+        )
         await message.answer(
             study_prompt(card, study_mode),
             parse_mode="HTML", reply_markup=reveal_keyboard(card.id, study_mode),
@@ -708,11 +809,13 @@ def create_router(
 
     @router.message(Command("study"))
     async def study(message: Message) -> None:
+        await repo.track_event(message.from_user.id, "study_started")
         await show_next(message, message.from_user.id)
 
     @router.message(F.text == STUDY_BUTTON)
     async def study_from_menu(message: Message, state: FSMContext) -> None:
         await state.clear()
+        await repo.track_event(message.from_user.id, "study_started")
         await show_next(message, message.from_user.id)
 
     @router.callback_query(F.data.startswith("reveal:"))
@@ -739,6 +842,11 @@ def create_router(
             await callback.answer("Карточка не найдена", show_alert=True)
             return
         await callback.answer("Готовлю произношение…")
+        await repo.track_event(
+            callback.from_user.id,
+            "tts_clicked",
+            {"language": card.language, "card_id": card.id},
+        )
         try:
             audio = await synthesize_word(card.word, card.language)
             await callback.message.answer_audio(
@@ -761,6 +869,16 @@ def create_router(
             card.id, callback.from_user.id, result.repetitions,
             result.interval_days, result.ease_factor, result.due_at,
             result.learning_level,
+        )
+        await repo.track_event(
+            callback.from_user.id,
+            "study_card_reviewed",
+            {
+                "language": card.language,
+                "card_id": card.id,
+                "quality": int(raw_quality),
+                "learning_level": result.learning_level,
+            },
         )
         await repo.record_study_day(callback.from_user.id, local_today())
         await callback.message.edit_reply_markup(reply_markup=None)

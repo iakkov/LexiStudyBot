@@ -61,6 +61,16 @@ async def send_due_reminders(
                 reminder_message(candidate, streak, today_done),
                 reply_markup=main_menu(),
             )
+            await repo.track_event(
+                candidate.user_id,
+                "reminder_sent",
+                {
+                    "language": candidate.language,
+                    "due_count": candidate.due_count,
+                    "streak_days": streak,
+                    "today_done": today_done,
+                },
+            )
             sent += 1
         except Exception:
             logger.exception("Failed to send reminder to user %s", candidate.user_id)

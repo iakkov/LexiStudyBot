@@ -12,6 +12,17 @@ class Config:
     openai_model: str
     reminder_timezone: str
     reminder_check_interval_seconds: int
+    admin_user_ids: set[int]
+
+
+def parse_admin_user_ids(value: str) -> set[int]:
+    result: set[int] = set()
+    for raw_item in value.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        result.add(int(item))
+    return result
 
 
 def load_config() -> Config:
@@ -33,4 +44,5 @@ def load_config() -> Config:
         openai_model=os.getenv("OPENAI_MODEL", "gpt-5.4-nano").strip(),
         reminder_timezone=os.getenv("REMINDER_TIMEZONE", "Europe/Moscow").strip(),
         reminder_check_interval_seconds=max(5, reminder_check_interval),
+        admin_user_ids=parse_admin_user_ids(os.getenv("ADMIN_USER_IDS", "")),
     )
